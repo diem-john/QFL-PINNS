@@ -1,0 +1,5 @@
+# For CPU
+python train_cli.py --station Taipei --device cpu
+
+# For GPU
+python train_cli.py --station Taipei --device cuda

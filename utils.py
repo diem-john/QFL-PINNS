@@ -1,5 +1,3 @@
-# utils.py
-
 import pandas as pd
 import numpy as np
 import torch
@@ -7,7 +5,7 @@ from torch import Tensor
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 from haversine import haversine, Unit
-from tqdm import tqdm  # <- ADDED: Switched to standard tqdm for CLI
+from tqdm import tqdm
 
 
 # --- Configuration and Constants ---
@@ -25,17 +23,15 @@ class Config:
 
     PINN_ALL_FEATURES = WEATHER_FEATURES + TYPHOON_FEATURES_EXO_PRED
 
-    DEVICE = torch.device('cpu')
+    # DEVICE removed: now determined by CLI argument
     SEQ2SEQ_BATCH_SIZE = 64
     PINN_BATCH_SIZE = 16
     PINN_EPOCHS = 10
     SEQ2SEQ_EPOCHS = 10
 
 
-# --- Utility Functions ---
-
+# ... (Utility Functions remain the same, using the imported 'tqdm')
 def calculate_distance(row: pd.Series) -> float:
-    # ... (function body remains the same)
     if 'lat' in row and 'lng' in row:
         typhoon_loc = (row['lat'], row['lng'])
     elif 'typhoon_lat' in row and 'typhoon_lng' in row:
@@ -91,7 +87,6 @@ def create_sequence_weather(sequence_length: int, target_window: int, scaled_dat
     x = []
     y = []
 
-    # <- ADDED: TQDM progress bar for sequence creation
     for i in tqdm(range(len(scaled_data_df) - sequence_length - target_window + 1), desc="Creating Weather Sequences"):
         sequence = scaled_data_df.iloc[i:i + sequence_length, feature_indices].values
         target = scaled_data_df.iloc[i + sequence_length:i + sequence_length + target_window,

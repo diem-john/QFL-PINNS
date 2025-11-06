@@ -1,5 +1,3 @@
-# train_cli.py
-
 import pandas as pd
 import numpy as np
 import torch
@@ -13,7 +11,7 @@ import os
 import sys
 import argparse
 import datetime
-from tqdm import tqdm  # <- ADDED: TQDM import
+from tqdm import tqdm
 
 # Import components from other files
 from models import Seq2Seq, HybridModelPINN
@@ -22,10 +20,23 @@ from utils import Config, calculate_distance, create_sequences_typhoon, \
 
 
 class E2EPipeline:
-    def __init__(self, station_name: str, config: Config):
+
+    # UPDATED: Accept device_name in __init__
+    def __init__(self, station_name: str, config: Config, device_name: str):
         self.station_name = station_name
         self.config = config
-        self.device = config.DEVICE
+
+        # NEW DEVICE LOGIC
+        if device_name == 'cuda' and torch.cuda.is_available():
+            self.device = torch.device('cuda')
+            print(f"Using CUDA device: {torch.cuda.get_device_name(0)}")
+        else:
+            self.device = torch.device('cpu')
+            if device_name == 'cuda':
+                print("CUDA requested but not available. Falling back to CPU.")
+            else:
+                print("Using CPU device.")
+
         self.seq2seq_config = {
             "input_size": len(config.TYPHOON_FEATURES_CORE),
             "hidden_size": 128,
@@ -40,22 +51,18 @@ class E2EPipeline:
             "hidden_dense": 512
         }
 
-        # <- UPDATED: Ensure all necessary directories exist
-        self._setup_directories(station_name)
+        self._setup_directories()
 
-    def _setup_directories(self, station_name: str):
+    def _setup_directories(self):
         """Creates model and metadata directories if they do not exist."""
         print("Setting up model directories...")
-        # Directory for typhoon model
         os.makedirs('models/typhoon', exist_ok=True)
-        # Directory for station-specific PINN models
         os.makedirs('models/weather_sta', exist_ok=True)
-        # Directory for station-specific metadata (metrics)
         os.makedirs('models/weather_sta/metadata', exist_ok=True)
         print("Directories verified/created.")
 
     def _load_typhoon_data(self) -> tuple[pd.DataFrame, MinMaxScaler, pd.DataFrame]:
-        # ... (function body remains the same)
+        # ... (unchanged)
         print("   -> Loading and preparing historical typhoon data...")
         typhoon_data_hist_raw = pd.read_csv('data/typhoon_data.csv', parse_dates=['Date'], infer_datetime_format=True)
         typhoon_data_hist_raw.rename(columns={'Date': 'time'}, inplace=True)
@@ -76,14 +83,14 @@ class E2EPipeline:
         """Trains the Seq2Seq model and generates a long-term forecast dataset."""
         print(f"\n--- Typhoon Model Training ({Config.TYPHOON_STEPS_IN} input to {Config.TARGET_WINDOW} output) ---")
 
-        # 1. Prepare sequences (same as before)
+        # 1. Prepare sequences (unchanged)
         X_typhoon, y_typhoon = create_sequences_typhoon(
             typhoon_df[self.config.TYPHOON_FEATURES_CORE].values,
             self.config.TYPHOON_STEPS_IN,
             self.config.TARGET_WINDOW
         )
 
-        # 2. Train/Validation/Test Split (same as before)
+        # 2. Train/Validation/Test Split (unchanged)
         split_idx = int(0.7 * len(X_typhoon))
         X_temp = X_typhoon[split_idx:]
         val_split_idx = int(0.5 * len(X_temp))
@@ -108,10 +115,8 @@ class E2EPipeline:
         min_val_loss = float('inf')
         early_stop_count = 0
 
-        # <- ADDED: TQDM progress bar for epochs
         for epoch in tqdm(range(self.config.SEQ2SEQ_EPOCHS), desc="Typhoon Model Training"):
             typhoon_model.train()
-            # <- ADDED: TQDM progress bar for training batches
             for batch_x, batch_y in tqdm(train_loader, desc=f"Epoch {epoch + 1}/{self.config.SEQ2SEQ_EPOCHS} (Train)",
                                          leave=False):
                 optimizer.zero_grad()
@@ -123,7 +128,6 @@ class E2EPipeline:
             typhoon_model.eval()
             val_losses = []
             with torch.no_grad():
-                # <- ADDED: TQDM progress bar for validation batches
                 for batch in tqdm(valid_loader, desc=f"Epoch {epoch + 1}/{self.config.SEQ2SEQ_EPOCHS} (Validation)",
                                   leave=False):
                     x_batch, y_batch = batch
@@ -143,12 +147,12 @@ class E2EPipeline:
                 print(f"[LOG] Early stopping at epoch {epoch + 1}")
                 break
 
-        # 4. Save the model (same as before)
+        # 4. Save the model
         model_path = 'models/typhoon/typhoon_model.pth'
         torch.save(typhoon_model.state_dict(), model_path)
         print(f"   -> Saved model state to '{model_path}'")
 
-        # 5. Generate forecast for all test sequences (same as before)
+        # 5. Generate forecast for all test sequences
         typhoon_model.eval()
         all_predictions = []
         with torch.no_grad():
@@ -161,7 +165,7 @@ class E2EPipeline:
             raw_predictions.reshape(-1, len(self.config.TYPHOON_FEATURES_CORE))
         ).reshape(raw_predictions.shape)
 
-        # 6. Create the full exogenous data (same as before)
+        # 6. Create the full exogenous data (unchanged)
         full_exogenous_df_list = []
         test_sequences_start_indices = np.arange(split_idx,
                                                  len(typhoon_df) - self.config.TYPHOON_STEPS_IN - self.config.TARGET_WINDOW + 1)
@@ -184,9 +188,7 @@ class E2EPipeline:
         return pd.concat(full_exogenous_df_list, ignore_index=True)
 
     def _load_and_preprocess_station_data(self) -> tuple[pd.DataFrame, pd.DataFrame]:
-        # ... (function body remains the same)
-        # Load and preprocess data (omitted for brevity, assume the logic is unchanged)
-
+        # ... (unchanged)
         station_coords = pd.read_csv('data/weather_station_coords.csv')
         station_coords.rename(columns={'lat': 'station_latitude',
                                        'long': 'station_longitude',
@@ -212,8 +214,7 @@ class E2EPipeline:
 
     def _prepare_pinn_exo_data(self, weather_df: pd.DataFrame, typhoon_data_hist_raw: pd.DataFrame) -> tuple[
         pd.DataFrame, int]:
-        # ... (function body remains the same)
-        # Merge, calculate distance, apply filter (omitted for brevity, assume the logic is unchanged)
+        # ... (unchanged)
         weather_exo_merge = pd.merge_asof(
             weather_df.sort_values('time'),
             typhoon_data_hist_raw[['time'] + self.config.TYPHOON_FEATURES_CORE].sort_values('time'),
@@ -237,7 +238,7 @@ class E2EPipeline:
         """Scales data, creates sequences, trains the Hybrid PINN model, and saves metrics."""
         print(f"\n--- Hybrid PINN Model Training for {self.station_name} ---")
 
-        # Scaling and Sequence Creation (uses TQDM via utils.py)
+        # Scaling and Sequence Creation (unchanged)
         scaler_features = MinMaxScaler()
         scaler_target = MinMaxScaler()
 
@@ -248,14 +249,14 @@ class E2EPipeline:
 
         X_pinn, y_pinn = create_sequence_weather(self.config.SEQUENCE_SIZE, self.config.TARGET_WINDOW, final_pinn_df)
 
-        # Data Splitting (same as before)
+        # Data Splitting (unchanged)
         X_train, X_temp, y_train, y_temp = train_test_split(X_pinn, y_pinn, test_size=0.2, random_state=42)
         X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
 
         train_loader = DataLoader(TensorDataset(X_train, y_train), batch_size=self.config.PINN_BATCH_SIZE, shuffle=True)
         val_loader = DataLoader(TensorDataset(X_val, y_val), batch_size=self.config.PINN_BATCH_SIZE, shuffle=False)
 
-        # Model Training Setup (same as before)
+        # Model Training Setup (unchanged)
         model_pinn = HybridModelPINN(**self.pinn_config).to(self.device)
         criterion = nn.MSELoss()
         optimizer = optim.Adam(model_pinn.parameters(), lr=0.001)
@@ -265,11 +266,9 @@ class E2EPipeline:
         early_stop_count = 0
 
         # Training Loop
-        # <- ADDED: TQDM progress bar for epochs
         for epoch in tqdm(range(self.config.PINN_EPOCHS), desc="PINN Model Training"):
             model_pinn.train()
             train_loss = []
-            # <- ADDED: TQDM progress bar for training batches
             for x_batch, y_batch in tqdm(train_loader, desc=f"Epoch {epoch + 1}/{self.config.PINN_EPOCHS} (Train)",
                                          leave=False):
                 x_batch, y_batch = x_batch.to(self.device), y_batch.to(self.device)
@@ -289,7 +288,6 @@ class E2EPipeline:
             model_pinn.eval()
             val_losses = []
             with torch.no_grad():
-                # <- ADDED: TQDM progress bar for validation batches
                 for x_batch, y_batch in tqdm(val_loader,
                                              desc=f"Epoch {epoch + 1}/{self.config.PINN_EPOCHS} (Validation)",
                                              leave=False):
@@ -312,7 +310,7 @@ class E2EPipeline:
                 print(f"[LOG] Early stopping at epoch {epoch + 1}")
                 break
 
-        # Save the model and metrics (same as before)
+        # Save the model and metrics (unchanged)
         model_path = f'models/weather_sta/{self.station_name.lower()}_pinn_model.pth'
         torch.save(model_pinn.state_dict(), model_path)
         print(f"   -> Saved model state to '{model_path}'")
@@ -320,4 +318,64 @@ class E2EPipeline:
         model_pinn.eval()
         X_test_tensor = X_test.to(self.device)
         with torch.no_grad():
-            y_pred_tensor, _, _, _ = model_p
+            y_pred_tensor, _, _, _ = model_pinn(X_test_tensor)
+            y_pred_scaled = y_pred_tensor.cpu().numpy()
+
+        pinn_metrics = calculate_metrics(y_test.numpy(), y_pred_scaled, scaler_target)
+
+        metrics_path = f'models/weather_sta/metadata/{self.station_name}_metrics.csv'
+        pd.DataFrame([pinn_metrics]).to_csv(metrics_path, index=False)
+
+        print(f"✅ Hybrid PINN Model Training Complete for {self.station_name}.")
+        print(
+            f"Total historical typhoon instances within {self.config.PROXIMITY_THRESHOLD_KM}km threshold: {affected_count} records.")
+        print("\n--- Hybrid PINN Model Metric Scores (Test Set) ---")
+        for key, value in pinn_metrics.items():
+            print(f"{key}: {value:.6f}")
+        print(f"   -> Metrics saved to '{metrics_path}'")
+
+    def run(self):
+        """Runs the complete E2E pipeline."""
+
+        typhoon_df_scaled, scaler_typhoon, typhoon_data_hist_raw = self._load_typhoon_data()
+        self._train_and_forecast_typhoon_model(typhoon_df_scaled, scaler_typhoon)
+
+        print(f"\n--- Starting Individual Station Workflow for {self.station_name} ---")
+
+        weather_df, _ = self._load_and_preprocess_station_data()
+        final_pinn_df, affected_count = self._prepare_pinn_exo_data(weather_df, typhoon_data_hist_raw)
+        self._train_pinn_model(final_pinn_df, affected_count)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="E2E Hybrid PINN Model Training Pipeline.")
+    parser.add_argument('--station', type=str, required=True,
+                        choices=['Guanyin', 'Keelung', 'Longtan', 'Taipei', 'Tamsui', 'Taoyuan', 'Yangmingshan'],
+                        help="The weather station to train the PINN model for.")
+
+    # NEW: Add --device argument
+    parser.add_argument('--device', type=str, default='cpu',
+                        choices=['cpu', 'cuda'],
+                        help="The computing device to use for training (cpu or cuda). Defaults to cpu.")
+
+    args = parser.parse_args()
+
+    print(f"Starting E2E Pipeline for Station: {args.station} | Requested Device: {args.device}")
+
+    # UPDATED: Pass the device argument to the pipeline
+    pipeline = E2EPipeline(station_name=args.station, config=Config, device_name=args.device)
+    pipeline.run()
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except FileNotFoundError as e:
+        print("\n" + "=" * 70)
+        print(f"ERROR: A required data file or directory was not found: {e.filename}")
+        print("Please ensure you have the 'data/' directory with all necessary CSV files.")
+        print("=" * 70 + "\n")
+        sys.exit(1)
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        sys.exit(1)
