@@ -1,3 +1,5 @@
+# train_cli.py
+
 import pandas as pd
 import numpy as np
 import torch
@@ -12,6 +14,9 @@ import sys
 import argparse
 import datetime
 from tqdm import tqdm
+import warnings
+
+warnings.filterwarnings('ignore')
 
 # Import components from other files
 from models import Seq2Seq, HybridModelPINN
@@ -21,12 +26,10 @@ from utils import Config, calculate_distance, create_sequences_typhoon, \
 
 class E2EPipeline:
 
-    # UPDATED: Accept device_name in __init__
     def __init__(self, station_name: str, config: Config, device_name: str):
         self.station_name = station_name
         self.config = config
 
-        # NEW DEVICE LOGIC
         if device_name == 'cuda' and torch.cuda.is_available():
             self.device = torch.device('cuda')
             print(f"Using CUDA device: {torch.cuda.get_device_name(0)}")
@@ -62,7 +65,7 @@ class E2EPipeline:
         print("Directories verified/created.")
 
     def _load_typhoon_data(self) -> tuple[pd.DataFrame, MinMaxScaler, pd.DataFrame]:
-        # ... (unchanged)
+        """Loads and scales historical typhoon data (Typhoon Model Phase 1)."""
         print("   -> Loading and preparing historical typhoon data...")
         typhoon_data_hist_raw = pd.read_csv('data/typhoon_data.csv', parse_dates=['Date'], infer_datetime_format=True)
         typhoon_data_hist_raw.rename(columns={'Date': 'time'}, inplace=True)
@@ -83,23 +86,31 @@ class E2EPipeline:
         """Trains the Seq2Seq model and generates a long-term forecast dataset."""
         print(f"\n--- Typhoon Model Training ({Config.TYPHOON_STEPS_IN} input to {Config.TARGET_WINDOW} output) ---")
 
-        # 1. Prepare sequences (unchanged)
+        # 1. Prepare sequences
         X_typhoon, y_typhoon = create_sequences_typhoon(
             typhoon_df[self.config.TYPHOON_FEATURES_CORE].values,
             self.config.TYPHOON_STEPS_IN,
             self.config.TARGET_WINDOW
         )
 
-        # 2. Train/Validation/Test Split (unchanged)
+        # 2. Train/Validation/Test Split
         split_idx = int(0.7 * len(X_typhoon))
-        X_temp = X_typhoon[split_idx:]
-        val_split_idx = int(0.5 * len(X_temp))
-        X_test_tensor = torch.from_numpy(X_temp[val_split_idx:]).float()
 
-        X_train_tensor = torch.from_numpy(X_typhoon[:split_idx]).float()
-        y_train_tensor = torch.from_numpy(y_typhoon[:split_idx]).float()
-        X_valid_tensor = torch.from_numpy(X_temp[:val_split_idx]).float()
-        y_valid_tensor = torch.from_numpy(y_temp[:val_split_idx]).float()
+        # Step 1: Split into Train and Temp (70% / 30%)
+        X_train, X_temp = X_typhoon[:split_idx], X_typhoon[split_idx:]
+        y_train, y_temp = y_typhoon[:split_idx], y_typhoon[split_idx:]  # <--- FIXED: y_temp is now correctly defined
+
+        # Step 2: Split Temp into Validation and Test (50% / 50%)
+        val_split_idx = int(0.5 * len(X_temp))
+        X_valid, X_test = X_temp[:val_split_idx], X_temp[val_split_idx:]
+        y_valid, y_test = y_temp[:val_split_idx], y_temp[val_split_idx:]
+
+        # Convert to Tensors and DataLoaders
+        X_train_tensor = torch.from_numpy(X_train).float()
+        y_train_tensor = torch.from_numpy(y_train).float()
+        X_valid_tensor = torch.from_numpy(X_valid).float()
+        y_valid_tensor = torch.from_numpy(y_valid).float()
+        X_test_tensor = torch.from_numpy(X_test).float()
 
         train_loader = DataLoader(TensorDataset(X_train_tensor, y_train_tensor),
                                   batch_size=self.config.SEQ2SEQ_BATCH_SIZE, shuffle=True)
@@ -165,7 +176,7 @@ class E2EPipeline:
             raw_predictions.reshape(-1, len(self.config.TYPHOON_FEATURES_CORE))
         ).reshape(raw_predictions.shape)
 
-        # 6. Create the full exogenous data (unchanged)
+        # 6. Create the full exogenous data
         full_exogenous_df_list = []
         test_sequences_start_indices = np.arange(split_idx,
                                                  len(typhoon_df) - self.config.TYPHOON_STEPS_IN - self.config.TARGET_WINDOW + 1)
@@ -188,7 +199,8 @@ class E2EPipeline:
         return pd.concat(full_exogenous_df_list, ignore_index=True)
 
     def _load_and_preprocess_station_data(self) -> tuple[pd.DataFrame, pd.DataFrame]:
-        # ... (unchanged)
+        """Loads coordinates and station-specific weather data."""
+
         station_coords = pd.read_csv('data/weather_station_coords.csv')
         station_coords.rename(columns={'lat': 'station_latitude',
                                        'long': 'station_longitude',
@@ -214,7 +226,8 @@ class E2EPipeline:
 
     def _prepare_pinn_exo_data(self, weather_df: pd.DataFrame, typhoon_data_hist_raw: pd.DataFrame) -> tuple[
         pd.DataFrame, int]:
-        # ... (unchanged)
+        """Merges weather data with historical typhoon data and applies proximity filter."""
+
         weather_exo_merge = pd.merge_asof(
             weather_df.sort_values('time'),
             typhoon_data_hist_raw[['time'] + self.config.TYPHOON_FEATURES_CORE].sort_values('time'),
@@ -238,7 +251,7 @@ class E2EPipeline:
         """Scales data, creates sequences, trains the Hybrid PINN model, and saves metrics."""
         print(f"\n--- Hybrid PINN Model Training for {self.station_name} ---")
 
-        # Scaling and Sequence Creation (unchanged)
+        # Scaling and Sequence Creation
         scaler_features = MinMaxScaler()
         scaler_target = MinMaxScaler()
 
@@ -249,14 +262,14 @@ class E2EPipeline:
 
         X_pinn, y_pinn = create_sequence_weather(self.config.SEQUENCE_SIZE, self.config.TARGET_WINDOW, final_pinn_df)
 
-        # Data Splitting (unchanged)
+        # Data Splitting
         X_train, X_temp, y_train, y_temp = train_test_split(X_pinn, y_pinn, test_size=0.2, random_state=42)
         X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
 
         train_loader = DataLoader(TensorDataset(X_train, y_train), batch_size=self.config.PINN_BATCH_SIZE, shuffle=True)
         val_loader = DataLoader(TensorDataset(X_val, y_val), batch_size=self.config.PINN_BATCH_SIZE, shuffle=False)
 
-        # Model Training Setup (unchanged)
+        # Model Training Setup
         model_pinn = HybridModelPINN(**self.pinn_config).to(self.device)
         criterion = nn.MSELoss()
         optimizer = optim.Adam(model_pinn.parameters(), lr=0.001)
@@ -310,7 +323,7 @@ class E2EPipeline:
                 print(f"[LOG] Early stopping at epoch {epoch + 1}")
                 break
 
-        # Save the model and metrics (unchanged)
+        # Save the model and metrics
         model_path = f'models/weather_sta/{self.station_name.lower()}_pinn_model.pth'
         torch.save(model_pinn.state_dict(), model_path)
         print(f"   -> Saved model state to '{model_path}'")
@@ -353,7 +366,6 @@ def main():
                         choices=['Guanyin', 'Keelung', 'Longtan', 'Taipei', 'Tamsui', 'Taoyuan', 'Yangmingshan'],
                         help="The weather station to train the PINN model for.")
 
-    # NEW: Add --device argument
     parser.add_argument('--device', type=str, default='cpu',
                         choices=['cpu', 'cuda'],
                         help="The computing device to use for training (cpu or cuda). Defaults to cpu.")
@@ -362,13 +374,13 @@ def main():
 
     print(f"Starting E2E Pipeline for Station: {args.station} | Requested Device: {args.device}")
 
-    # UPDATED: Pass the device argument to the pipeline
     pipeline = E2EPipeline(station_name=args.station, config=Config, device_name=args.device)
     pipeline.run()
 
 
 if __name__ == '__main__':
     try:
+        # Note: You need to ensure models.py and utils.py are saved alongside this file.
         main()
     except FileNotFoundError as e:
         print("\n" + "=" * 70)
